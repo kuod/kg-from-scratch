@@ -1,10 +1,11 @@
+```
     __               ____                                                __       __  
    / /______ _      / __/________  ____ ___        ___________________ _/ /______/ /_ 
   / //_/ __ `/_____/ /_/ ___/ __ \/ __ `__ \______/ ___/ ___/ ___/ __ `/ __/ ___/ __ \
  / ,< / /_/ /_____/ __/ /  / /_/ / / / / / /_____(__  ) /__/ /  / /_/ / /_/ /__/ / / /
 /_/|_|\__, /     /_/ /_/   \____/_/ /_/ /_/     /____/\___/_/   \__,_/\__/\___/_/ /_/ 
      /____/                                                                           
-
+```
 # Biomedical Knowledge Graph from Scratch
 
 A pipeline that ingests biomedical papers (PDF or Markdown), extracts entities and relationships using LLMs, builds a Neo4j knowledge graph, and exposes a Streamlit chatbot that answers questions with **95% confidence intervals**.

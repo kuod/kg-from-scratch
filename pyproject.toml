@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "kg-from-scratch"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "neo4j>=5.18",
+    "python-dotenv>=1.0",
+    "streamlit>=1.35",
+    "sentence-transformers>=3.0",
+    "pyvis>=0.3",
+    "pymupdf4llm>=0.0.17",
+    "pdfminer.six>=20221105",
+    "scispacy>=0.5",
+    "anthropic>=0.30",
+    "groq>=0.9",
+    "tqdm>=4.66",
+    "scipy>=1.13",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "openai>=1.35",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "black>=24",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

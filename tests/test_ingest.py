@@ -44,7 +44,8 @@ def test_load_paper_returns_chunks():
     assert len(chunks) >= 3
     sections = [c.section for c in chunks]
     assert any("Introduction" in s for s in sections)
-    assert any("Methods" in s for s in sections)
+    # "## Methods" has an empty body (only a sub-header), so it is skipped
+    assert any("Cell culture" in s for s in sections)
     assert any("Results" in s for s in sections)
 
 
@@ -97,3 +98,41 @@ def test_empty_sections_skipped():
     sections = [c.section for c in chunks]
     assert "Empty" not in sections
     assert "Has Content" in sections
+
+
+def test_blank_file_yields_no_chunks():
+    for content in ("", "  \n\n\t\n"):
+        assert load_paper(_write_temp_md(content)) == []
+
+
+# ---- issue #22: "#"-style section headers ----
+
+def test_single_hash_sections_split():
+    md = "# My Paper\n\nAbstract words here.\n\n# Introduction\n\nIntro text.\n\n# Methods\n\nMethod text.\n"
+    secs = _split_into_sections(md)
+    assert [s[0] for s in secs] == ["Preamble", "Introduction", "Methods"]
+    assert "My Paper" in secs[0][1]
+
+
+def test_single_hash_clean_header():
+    assert _clean_header("# Results") == "Results"
+
+
+def test_bare_hashes_do_not_swallow_next_line():
+    md = "## Intro\n\nText one.\n\n##\nNot a title line\n\n## Methods\n\nText two.\n"
+    titles = [s[0] for s in _split_into_sections(md)]
+    assert "Not a title line" not in titles
+    assert titles == ["Intro", "Methods"]
+
+
+def test_bold_figure_caption_not_a_header():
+    md = "## Results\n\nSome text.\n\n**Figure 1.**\n\nCaption text continues.\n\n## Discussion\n\nMore.\n"
+    titles = [s[0] for s in _split_into_sections(md)]
+    assert titles == ["Results", "Discussion"]
+
+
+def test_hash_only_paper_not_one_chunk(tmp_path):
+    p = tmp_path / "paper.md"
+    p.write_text("# T\n\n# Intro\n\nalpha beta.\n\n# Methods\n\ngamma delta.\n")
+    sections = {c.section for c in load_paper(p)}
+    assert {"Intro", "Methods"} <= sections

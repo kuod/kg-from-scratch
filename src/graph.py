@@ -22,6 +22,23 @@ RELATIONSHIP_TYPES = [
 ]
 
 
+def check_label(label: str) -> str:
+    """Return label if it is a known entity label, else raise ValueError.
+
+    Labels and relationship types cannot be passed as Cypher parameters, so they
+    are interpolated into queries; they must therefore come from an allow-list.
+    """
+    if label not in ENTITY_LABELS:
+        raise ValueError(f"Unknown entity label: {label!r}")
+    return label
+
+
+def check_rel_type(rel_type: str) -> str:
+    if rel_type not in RELATIONSHIP_TYPES:
+        raise ValueError(f"Unknown relationship type: {rel_type!r}")
+    return rel_type
+
+
 class GraphDB:
     def __init__(
         self,
@@ -93,6 +110,16 @@ class GraphDB:
             id=chunk_id, paper_id=paper_id, section=section, chunk_index=chunk_index, text=text,
         )
 
+    def mark_chunk_processed(self, chunk_id: str) -> None:
+        """Flag a chunk once its entities/relationships have been fully written."""
+        self.run("MATCH (c:Chunk {id: $id}) SET c.processed=true", id=chunk_id)
+
+    def is_chunk_processed(self, chunk_id: str) -> bool:
+        rows = self.run(
+            "MATCH (c:Chunk {id: $id}) RETURN coalesce(c.processed, false) AS done", id=chunk_id
+        )
+        return bool(rows and rows[0]["done"])
+
     def upsert_entity(
         self,
         label: str,
@@ -107,20 +134,26 @@ class GraphDB:
         if umls_cui:
             props["umls_cui"] = umls_cui
         props.update(extra_props)
-        set_clause = ", ".join(f"n.{k}=${k}" for k in props)
+        # Aliases are merged (union) rather than overwritten, so a later call
+        # without aliases (e.g. relationship endpoints) never wipes them.
+        sets = [
+            "n.aliases = reduce(acc = [], x IN coalesce(n.aliases, []) + $aliases | "
+            "CASE WHEN x IN acc THEN acc ELSE acc + [x] END)"
+        ]
+        sets += [f"n.{k}=${k}" for k in props if k not in ("name", "aliases")]
         self.run(
-            f"MERGE (n:{label} {{name: $name}}) SET {set_clause}",
+            f"MERGE (n:{label} {{name: $name}}) SET {', '.join(sets)}",
             **props,
         )
 
     def upsert_mention(self, entity_label: str, entity_name: str, chunk_id: str) -> None:
         """Link an entity to the chunk that mentions it."""
+        check_label(entity_label)
         self.run(
             f"MATCH (e:{entity_label} {{name: $name}}) "
             "MATCH (c:Chunk {id: $chunk_id}) "
             "MERGE (e)-[r:MENTIONED_IN]->(c) "
-            "ON CREATE SET r.count=1 "
-            "ON MATCH SET r.count=r.count+1",
+            "ON CREATE SET r.count=1",
             name=entity_name, chunk_id=chunk_id,
         )
 
@@ -137,13 +170,16 @@ class GraphDB:
         """Upsert a relationship between two entities, tracking evidence."""
         if rel_type not in RELATIONSHIP_TYPES:
             rel_type = "ASSOCIATED_WITH"
+        check_label(src_label)
+        check_label(tgt_label)
         self.run(
             f"MATCH (s:{src_label} {{name: $src}}) "
             f"MATCH (t:{tgt_label} {{name: $tgt}}) "
             f"MERGE (s)-[r:{rel_type}]->(t) "
             "ON CREATE SET r.evidence_count=1, r.source_chunk_ids=[$chunk_id] "
             "ON MATCH SET "
-            "  r.evidence_count=r.evidence_count+1, "
+            "  r.evidence_count=CASE WHEN $chunk_id IN r.source_chunk_ids "
+            "    THEN r.evidence_count ELSE r.evidence_count+1 END, "
             "  r.source_chunk_ids=CASE WHEN NOT $chunk_id IN r.source_chunk_ids "
             "    THEN r.source_chunk_ids + [$chunk_id] "
             "    ELSE r.source_chunk_ids END",
@@ -164,6 +200,8 @@ class GraphDB:
     ) -> None:
         if rel_type not in RELATIONSHIP_TYPES:
             rel_type = "ASSOCIATED_WITH"
+        check_label(src_label)
+        check_label(tgt_label)
         self.run(
             f"MATCH (s:{src_label} {{name: $src}}) "
             f"MATCH (t:{tgt_label} {{name: $tgt}}) "
@@ -179,18 +217,20 @@ class GraphDB:
         if is_chunk:
             self.run("MATCH (c:Chunk {id: $id}) SET c.embedding=$emb", id=name_or_id, emb=embedding)
         else:
+            check_label(label)
             self.run(f"MATCH (n:{label} {{name: $name}}) SET n.embedding=$emb", name=name_or_id, emb=embedding)
 
     # ------------------------------------------------------------------ queries
 
     def get_entity_relationships(self, label: str, name: str) -> list[dict[str, Any]]:
+        check_label(label)
         return self.run(
             f"MATCH (s:{label} {{name: $name}})-[r]->(t) "
             "RETURN type(r) AS rel_type, labels(t)[0] AS tgt_label, t.name AS tgt_name, "
             "r.evidence_count AS evidence_count, "
             "r.confidence_lower AS confidence_lower, r.confidence_upper AS confidence_upper "
             "UNION "
-            f"MATCH (s)<-[r]-(src:{label} {{name: $name}}) "
+            f"MATCH (src)-[r]->(n:{label} {{name: $name}}) "
             "RETURN type(r) AS rel_type, labels(src)[0] AS tgt_label, src.name AS tgt_name, "
             "r.evidence_count AS evidence_count, "
             "r.confidence_lower AS confidence_lower, r.confidence_upper AS confidence_upper",
@@ -206,12 +246,29 @@ class GraphDB:
         )
 
     def find_path(self, src_label: str, src_name: str, tgt_label: str, tgt_name: str, max_hops: int = 4) -> list[dict]:
+        check_label(src_label)
+        check_label(tgt_label)
+        max_hops = max(1, min(int(max_hops), 6))
         return self.run(
             f"MATCH p=shortestPath((s:{src_label} {{name: $src}})-[*1..{max_hops}]-(t:{tgt_label} {{name: $tgt}})) "
             "RETURN [n IN nodes(p) | n.name] AS node_names, "
             "[r IN relationships(p) | type(r)] AS rel_types",
             src=src_name, tgt=tgt_name,
         )
+
+    def get_edge_confidence(
+        self, src_label: str, src_name: str, rel_type: str, tgt_label: str, tgt_name: str
+    ) -> dict[str, Any]:
+        check_label(src_label)
+        check_label(tgt_label)
+        check_rel_type(rel_type)
+        rows = self.run(
+            f"MATCH (s:{src_label} {{name: $src}})-[r:{rel_type}]->(t:{tgt_label} {{name: $tgt}}) "
+            "RETURN r.confidence_lower AS lower, r.confidence_upper AS upper, "
+            "r.evidence_count AS evidence_count",
+            src=src_name, tgt=tgt_name,
+        )
+        return rows[0] if rows else {"lower": None, "upper": None, "evidence_count": 0}
 
     def get_graph_stats(self) -> dict[str, Any]:
         stats: dict[str, Any] = {}

@@ -83,7 +83,11 @@ def _strip_repeated_headers_footers(md: str) -> str:
     # A line appearing > 3 times and shorter than 120 chars is likely a header/footer
     noise = {text for text, n in counts.items() if n > 3 and len(text) < 120}
     # Never remove section headers or long sentences
-    noise = {t for t in noise if not t.startswith("#") and len(t.split()) < 15}
+    # ...and never table rows / separators or bold sub-headers
+    noise = {
+        t for t in noise
+        if not t.startswith(("#", "|", "**")) and len(t.split()) < 15
+    }
     return "\n".join(ln for ln in lines if ln.strip() not in noise)
 
 

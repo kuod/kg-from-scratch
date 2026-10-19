@@ -59,7 +59,7 @@ def _process_paper(md_file: Path, db: GraphDB, resume: bool) -> None:
     for chunk in tqdm(chunks, desc=paper_id, leave=False):
         chunk_id = f"{paper_id}__{chunk.chunk_index:04d}"
 
-        if resume and _chunk_already_processed(db, chunk_id):
+        if resume and db.is_chunk_processed(chunk_id):
             continue
 
         db.upsert_chunk(
@@ -95,13 +95,8 @@ def _process_paper(md_file: Path, db: GraphDB, resume: bool) -> None:
                 chunk_id=chunk_id,
             )
 
-
-def _chunk_already_processed(db: GraphDB, chunk_id: str) -> bool:
-    rows = db.run(
-        "MATCH (c:Chunk {id: $id})-[:MENTIONED_IN|FROM_PAPER]-() RETURN count(*) AS cnt",
-        id=chunk_id,
-    )
-    return bool(rows and rows[0]["cnt"] > 0)
+        # Only now is the chunk complete; --resume skips chunks with this flag.
+        db.mark_chunk_processed(chunk_id)
 
 
 def _extract_title(md_file: Path) -> str:

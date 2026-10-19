@@ -144,7 +144,7 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
   - Entry points:
     - `embed_all_nodes(db, verbose=True) → int` (embeds all nodes, writes to Neo4j)
     - `encode_texts(texts: list[str]) → list[list[float]]` (encode arbitrary strings)
-    - `query_similar_chunks(query: str, db: GraphDB, top_k: int) → list[dict]` (semantic search)
+    - `query_similar_chunks(db: GraphDB, query: str, top_k: int) → list[dict]` (semantic search)
   - Lazy-loads model on first call (cached in `~/.cache/huggingface/`)
 
 - **`src/tokenize_graph.py`** — Node text templating for embedding
@@ -162,16 +162,16 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
     - Stored as `confidence_lower` and `confidence_upper` on edges
     - Entry point: `compute_edge_confidences(db) → int` (updates edges, returns count)
   - **Level 2 (Query-time)**: LLM-elicited epistemic CI from source passages
-    - Entry point: `calibrate_answer_confidence(answer, chunk_texts, db) → dict`
+    - Entry point: `calibrate_answer_confidence(question, answer, source_texts, model=None) → dict`
   - **Level 3 (Optional)**: Log-probability CI (if provider exposes logprobs)
     - Controlled by `USE_LOGPROB_CI` env var
-  - Wilson formula implements 95% CI with continuity correction
+  - Wilson score interval (no continuity correction), 95% by default
 
 #### **7. Query Interface (RAG Agent)**
 
 - **`src/agent.py`** — Tool-using Claude agent
   - Uses `claude-sonnet-4-6` (configurable via `AGENT_MODEL` env var)
-  - Max 8 tool calls per query to avoid loops
+  - Max 8 turns per query (each turn may issue several tool calls) to avoid loops
   - **7 tools**:
     1. `rank_papers(query, top_k)` — Rank papers by semantic similarity
     2. `search_entity(name, entity_type)` — Find entities by name/type
@@ -239,7 +239,7 @@ class NEREntity:
 3. **Caching**: LLM extraction results cached to disk in `data/cache/`; models cached via `@functools.lru_cache(maxsize=1)`
 4. **Lazy Loading**: Sentence transformers and scispaCy models loaded on first use
 5. **Composition**: `build_graph.py` orchestrates NER, extraction, and graph updates without duplicating logic
-6. **Tool-Use Loop**: Agent makes up to 8 tool calls per query; Claude decides when to stop
+6. **Tool-Use Loop**: Agent runs up to 8 turns per query; Claude decides when to stop
 
 ---
 
@@ -264,7 +264,7 @@ python scripts/convert_pdfs.py --pdf path/to/paper.pdf
 
 ### Testing
 
-All tests run **without Neo4j or API keys** (they mock external dependencies):
+All tests run **without Neo4j or API keys** (they avoid or stub external dependencies):
 
 ```bash
 pytest tests/                           # Run all tests
@@ -284,7 +284,7 @@ Test files:
 ```bash
 black src/ scripts/ app.py tests/      # Format with Black (100 char line length)
 ruff check src/                        # Lint with Ruff
-mypy src/                              # Type check (strict mode)
+mypy src/                              # Type check (default config; not strict)
 ```
 
 Code style:
@@ -326,12 +326,11 @@ data/
 - NER: `scispacy` (+ two S3-hosted models installed separately)
 - PDF: `pymupdf4llm`, `pdfminer.six`
 - Stats: `scipy`, `numpy`, `pandas`, `tqdm`
-- Dev: `pytest`, `pytest-asyncio`, `black`, `ruff`, `mypy`
+- Dev: `pytest`, `black`, `ruff`, `mypy`
 
 **External services** (require API keys in `.env`):
 - **Groq** (`GROQ_API_KEY`) — Extraction model (`llama-3.3-70b-versatile`)
 - **Anthropic** (`ANTHROPIC_API_KEY`) — Agent model (`claude-sonnet-4-6`)
-- **Google** (`GOOGLE_API_KEY`, optional) — Fallback model
 
 **Docker services**:
 - **Neo4j 5.20** (community edition) with APOC and Graph Data Science plugins
@@ -354,7 +353,7 @@ data/
 
 **Indexes:**
 - Uniqueness constraints on `Paper.id`, `Chunk.id`, and entity names per type
-- Vector indexes for semantic search (created by `db.setup_vector_indexes()`)
+- Vector indexes for semantic search (created by `embed.embed_all_nodes` via `_ensure_vector_indexes`; `GraphDB.setup_vector_indexes` is unused legacy)
 
 ---
 

@@ -22,10 +22,7 @@ def wilson_ci(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     """
     if n == 0:
         return (0.0, 1.0)
-    if k == 0:
-        return (0.0, 0.0)
-    if k == n:
-        return (1.0, 1.0)
+    k = max(0, min(k, n))
 
     # z for two-tailed 95% CI
     z = _z_score(1.0 - alpha / 2.0)
@@ -38,6 +35,17 @@ def wilson_ci(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     lower = max(0.0, centre - margin)
     upper = min(1.0, centre + margin)
     return (round(lower, 4), round(upper, 4))
+
+
+def format_ci(lower: Any, upper: Any) -> str:
+    """Render a CI as '[lo, hi]'; a dash when either bound is missing/NaN."""
+    try:
+        lo, hi = float(lower), float(upper)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isnan(lo) or math.isnan(hi):
+        return "—"
+    return f"[{lo:.2f}, {hi:.2f}]"
 
 
 def _z_score(p: float) -> float:

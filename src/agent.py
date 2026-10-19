@@ -20,7 +20,7 @@ from typing import Any
 import anthropic  # type: ignore
 
 from src.config import AGENT_MODEL
-from src.graph import GraphDB, ENTITY_LABELS
+from src.graph import GraphDB, ENTITY_LABELS, check_label
 from src.embed import query_similar_chunks
 from src.confidence import calibrate_answer_confidence
 
@@ -162,6 +162,7 @@ def ask_with_confidence(
     tool_trace: list[dict] = []
     used_chunk_ids: list[str] = []
 
+    response = None
     for _ in range(max_turns):
         response = client.messages.create(
             model=AGENT_MODEL,
@@ -185,7 +186,12 @@ def ask_with_confidence(
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            result = _execute_tool(block.name, block.input, db)
+            is_error = False
+            try:
+                result = _execute_tool(block.name, block.input, db)
+            except Exception as exc:  # report to the model instead of crashing the app
+                result = {"error": f"{type(exc).__name__}: {exc}"}
+                is_error = True
             tool_trace.append({"tool": block.name, "input": block.input, "output": result})
 
             # Collect chunk IDs from search results
@@ -200,15 +206,21 @@ def ask_with_confidence(
                 "type": "tool_result",
                 "tool_use_id": block.id,
                 "content": json.dumps(result, default=str),
+                **({"is_error": True} if is_error else {}),
             })
 
         messages.append({"role": "user", "content": tool_results})
 
     # Extract final answer text
     answer = ""
-    for block in response.content:
-        if hasattr(block, "text"):
-            answer += block.text
+    if response is not None:
+        for block in response.content:
+            if hasattr(block, "text"):
+                answer += block.text
+    if response is None or response.stop_reason == "tool_use" or not answer.strip():
+        answer = (
+            answer.strip() + "\n\n" if answer.strip() else ""
+        ) + f"(No final answer was produced within {max_turns} turns. Try a narrower question.)"
 
     # Calibrate confidence
     source_texts = _fetch_chunk_texts(used_chunk_ids[:8], db)
@@ -247,13 +259,11 @@ def _execute_tool(name: str, inputs: dict, db: GraphDB) -> Any:
         )
 
     if name == "get_edge_confidence":
-        rel = inputs["relationship"].upper()
-        rows = db.run(
-            f"MATCH (s:{inputs['source_type']} {{name: $src}})-[r:{rel}]->(t:{inputs['target_type']} {{name: $tgt}}) "
-            "RETURN r.confidence_lower AS lower, r.confidence_upper AS upper, r.evidence_count AS evidence_count",
-            src=inputs["source_name"], tgt=inputs["target_name"],
+        return db.get_edge_confidence(
+            inputs["source_type"], inputs["source_name"],
+            inputs["relationship"].upper(),
+            inputs["target_type"], inputs["target_name"],
         )
-        return rows[0] if rows else {"lower": None, "upper": None, "evidence_count": 0}
 
     return {"error": f"Unknown tool: {name}"}
 
@@ -271,7 +281,7 @@ def _rank_papers(query: str, top_k: int, db: GraphDB) -> list[dict]:
 
 
 def _search_entity(name: str, entity_type: str, db: GraphDB) -> list[dict]:
-    labels = ENTITY_LABELS if entity_type == "Any" else [entity_type]
+    labels = ENTITY_LABELS if entity_type == "Any" else [check_label(entity_type)]
     results = []
     for label in labels:
         rows = db.run(
@@ -286,7 +296,10 @@ def _search_entity(name: str, entity_type: str, db: GraphDB) -> list[dict]:
 
 def _search_chunks(query: str, top_k: int, expand_graph: bool, db: GraphDB) -> list[dict]:
     # Semantic search
-    semantic = query_similar_chunks(db, query, top_k=top_k)
+    try:
+        semantic = query_similar_chunks(db, query, top_k=top_k)
+    except Exception:
+        semantic = []  # no vector index (e.g. built with --skip-embed): keyword only
 
     # Keyword search
     keyword = db.keyword_search_chunks(query, limit=top_k)

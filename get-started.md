@@ -34,7 +34,7 @@ pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/e
 ```
 
 - `en_core_sci_lg` — general biomedical NER using UMLS semantic types (genes, diseases, chemicals, etc.)
-- `en_ner_bc5cdr_md` — specialized disease and drug detection with UMLS CUI linking
+- `en_ner_bc5cdr_md` — specialized disease and drug detection (no UMLS linking; the optional UMLS linker is attached to `en_core_sci_lg` and downloads a large knowledge base on first use)
 
 ---
 
@@ -51,7 +51,7 @@ GROQ_API_KEY=your_groq_key_here
 ANTHROPIC_API_KEY=your_anthropic_key_here
 ```
 
-All other values have working defaults. If you change `NEO4J_PASSWORD`, update it to match in `docker-compose.yml` under `NEO4J_AUTH: neo4j/<password>`.
+All other values have working defaults. `docker-compose.yml` reads `NEO4J_PASSWORD` from `.env`, so setting it there is enough (recreate the container with `docker compose down -v` if the database already exists with the old password).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -156,7 +156,7 @@ Keep Neo4j running (`docker compose up -d`) while the app is active.
 ## Using the App
 
 ### Ask tab
-Type any biomedical question. The agent runs up to 10 tool calls against the knowledge graph, then synthesizes an answer with:
+Type any biomedical question. The agent runs up to 8 reasoning turns (each may issue several tool calls) against the knowledge graph, then synthesizes an answer with:
 - **Citations** in the form `[paper_id § section]`
 - **Confidence badge**: High / Medium / Low label
 - **95% confidence interval**: `[lower, upper]` — a Wilson score CI on the graph evidence, plus an LLM-elicited epistemic CI on the answer quality
@@ -190,7 +190,7 @@ cp new_paper.md data/papers/
 python scripts/build.py --resume
 ```
 
-`--resume` skips any chunk that already has edges in Neo4j. LLM extraction for new chunks will be cached automatically.
+`--resume` skips any chunk that was fully processed (flagged `processed` in Neo4j). LLM extraction for new chunks will be cached automatically.
 
 To rebuild from scratch:
 
@@ -207,14 +207,14 @@ The scispaCy model URLs were not pip-installed. Re-run the two `pip install http
 
 **`Neo4j connection failed` in the Streamlit sidebar**
 - Check Docker is running: `docker compose ps`
-- Check the password matches: compare `NEO4J_PASSWORD` in `.env` with `NEO4J_AUTH` in `docker-compose.yml`
+- Check the password matches: the password in `.env` must be the one the database was first created with (`docker compose down -v` resets it)
 - Check the port is free: `lsof -i :7687`
 
 **`No markdown files found in data/papers/`**
 Your `.md` files need to be in `data/papers/`, not in a subdirectory. Run `ls data/papers/` to verify.
 
-**`GROQ_API_KEY not set` / `ANTHROPIC_API_KEY not set`**
-You created `.env.example` but not `.env`. Run `cp .env.example .env` and fill in your keys.
+**Authentication errors from Groq / Anthropic**
+You created `.env.example` but not `.env`. Run `cp .env.example .env` and fill in your keys. Note that a failing Groq call silently falls back to Anthropic, so a missing `GROQ_API_KEY` shows up as extra Anthropic usage rather than an error.
 
 **`Both pdf converters failed`**
 The PDF is likely encrypted or image-only (scanned without OCR). Run the PDF through an OCR tool first (e.g., Adobe Acrobat, `ocrmypdf`) to produce a text-layer PDF.
@@ -245,7 +245,6 @@ For the full rationale and data flow diagram see `plan.md`. Quick reference:
 | `src/confidence.py` | Wilson score CI (build time) + LLM-elicited CI (query time) |
 | `src/agent.py` | 7-tool RAG agent returning answer + CI + tool trace |
 | `src/clean_graph.py` | Post-extraction noise removal |
-| `src/resolve.py` | Synonym + normalization entity deduplication |
 | `app.py` | Streamlit 4-tab UI |
 | `scripts/build.py` | Full pipeline CLI |
 | `scripts/convert_pdfs.py` | Batch PDF → Markdown CLI |

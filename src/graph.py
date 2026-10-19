@@ -107,9 +107,15 @@ class GraphDB:
         if umls_cui:
             props["umls_cui"] = umls_cui
         props.update(extra_props)
-        set_clause = ", ".join(f"n.{k}=${k}" for k in props)
+        # Aliases are merged (union) rather than overwritten, so a later call
+        # without aliases (e.g. relationship endpoints) never wipes them.
+        sets = [
+            "n.aliases = reduce(acc = [], x IN coalesce(n.aliases, []) + $aliases | "
+            "CASE WHEN x IN acc THEN acc ELSE acc + [x] END)"
+        ]
+        sets += [f"n.{k}=${k}" for k in props if k not in ("name", "aliases")]
         self.run(
-            f"MERGE (n:{label} {{name: $name}}) SET {set_clause}",
+            f"MERGE (n:{label} {{name: $name}}) SET {', '.join(sets)}",
             **props,
         )
 
@@ -119,8 +125,7 @@ class GraphDB:
             f"MATCH (e:{entity_label} {{name: $name}}) "
             "MATCH (c:Chunk {id: $chunk_id}) "
             "MERGE (e)-[r:MENTIONED_IN]->(c) "
-            "ON CREATE SET r.count=1 "
-            "ON MATCH SET r.count=r.count+1",
+            "ON CREATE SET r.count=1",
             name=entity_name, chunk_id=chunk_id,
         )
 
@@ -143,7 +148,8 @@ class GraphDB:
             f"MERGE (s)-[r:{rel_type}]->(t) "
             "ON CREATE SET r.evidence_count=1, r.source_chunk_ids=[$chunk_id] "
             "ON MATCH SET "
-            "  r.evidence_count=r.evidence_count+1, "
+            "  r.evidence_count=CASE WHEN $chunk_id IN r.source_chunk_ids "
+            "    THEN r.evidence_count ELSE r.evidence_count+1 END, "
             "  r.source_chunk_ids=CASE WHEN NOT $chunk_id IN r.source_chunk_ids "
             "    THEN r.source_chunk_ids + [$chunk_id] "
             "    ELSE r.source_chunk_ids END",

@@ -35,7 +35,7 @@ def clean_graph(db: "GraphDB") -> dict[str, int]:
 
     # 2. Remove entities whose name is a single character or purely numeric
     rows = db.run(
-        "MATCH (n) WHERE size(n.name) <= 1 OR n.name =~ '^[0-9.]+$' "
+        "MATCH (n) WHERE (size(n.name) <= 1 OR n.name =~ '^[0-9.]+$') "
         "AND NOT n:Paper AND NOT n:Chunk "
         "WITH n LIMIT 2000 "
         "DETACH DELETE n RETURN count(n) AS cnt"

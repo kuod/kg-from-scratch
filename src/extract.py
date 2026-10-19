@@ -71,14 +71,18 @@ def extract_from_chunk(chunk: Chunk, ner_entities: list[NEREntity]) -> dict[str,
     """
     cache_file = _cache_path(chunk.paper_id, chunk.chunk_index)
     if cache_file.exists():
-        cached = json.loads(cache_file.read_text())
-        text_key = _cache_key(chunk.text)
-        if cached.get("_text_key") == text_key:
+        try:
+            cached = json.loads(cache_file.read_text())
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            cached = None  # truncated/corrupt cache entry: re-extract
+        if isinstance(cached, dict) and cached.get("_text_key") == _cache_key(chunk.text):
             return cached
 
     result = _call_llm(chunk.text, ner_entities)
     result["_text_key"] = _cache_key(chunk.text)
-    cache_file.write_text(json.dumps(result, indent=2))
+    tmp = cache_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(result, indent=2))
+    tmp.replace(cache_file)  # atomic: an interrupted run never leaves a partial file
     return result
 
 
@@ -129,21 +133,34 @@ def _call_anthropic(user_message: str) -> dict[str, Any]:
 
 
 def _parse_json(raw: str) -> dict[str, Any]:
+    import re
+
+    data: Any = None
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         # Extract JSON from fenced block if model added markdown
-        import re
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        match = re.search(r"\{.*\}", raw or "", re.DOTALL)
         if match:
-            data = json.loads(match.group(0))
-        else:
-            data = {}
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = None
+    if not isinstance(data, dict):
+        data = {}
 
     return {
-        "entities": _validate_entities(data.get("entities", [])),
-        "relationships": _validate_relationships(data.get("relationships", [])),
+        "entities": _validate_entities(_as_list(data.get("entities"))),
+        "relationships": _validate_relationships(_as_list(data.get("relationships"))),
     }
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _str(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _validate_entities(raw: list[Any]) -> list[dict[str, Any]]:
@@ -151,13 +168,13 @@ def _validate_entities(raw: list[Any]) -> list[dict[str, Any]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = item.get("name", "").strip()
+        name = _str(item.get("name"))
         etype = item.get("type", "Mechanism")
         if name and etype in ENTITY_TYPES:
             clean.append({
                 "name": name,
                 "type": etype,
-                "aliases": [a for a in item.get("aliases", []) if isinstance(a, str)],
+                "aliases": [a for a in _as_list(item.get("aliases")) if isinstance(a, str)],
             })
     return clean
 
@@ -167,9 +184,9 @@ def _validate_relationships(raw: list[Any]) -> list[dict[str, Any]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        rel = item.get("relationship", "").upper()
-        src = item.get("source_name", "").strip()
-        tgt = item.get("target_name", "").strip()
+        rel = _str(item.get("relationship")).upper()
+        src = _str(item.get("source_name"))
+        tgt = _str(item.get("target_name"))
         src_type = item.get("source_type", "Mechanism")
         tgt_type = item.get("target_type", "Mechanism")
         if src and tgt and rel in RELATIONSHIP_TYPES:

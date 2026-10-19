@@ -2,7 +2,7 @@
 Full pipeline runner: PDF → Markdown → Graph → Resolve → Embed.
 
 Usage:
-    python scripts/build.py [--clear] [--skip-pdf] [--skip-ner] [--skip-embed]
+    python scripts/build.py [--clear] [--resume] [--paper ID] [--skip-pdf] [--skip-embed]
 """
 from __future__ import annotations
 

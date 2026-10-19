@@ -88,7 +88,7 @@ Installed via `pip install -e ".[dev]"`:
 | `scispacy` | ≥ 0.5 | Biomedical NER framework |
 | `anthropic` | ≥ 0.30 | Claude API (agent + confidence calibration) |
 | `groq` | ≥ 0.9 | Groq API (relation extraction LLM) |
-| `openai` | ≥ 1.35 | OpenAI-compatible fallback |
+| `openai` | ≥ 1.35 | Declared but currently unused |
 | `tqdm` | ≥ 4.66 | Progress bars |
 | `scipy` | ≥ 1.13 | Wilson score CI (normal distribution) |
 | `numpy` | ≥ 1.26 | Embedding arrays |
@@ -99,7 +99,7 @@ Installed via `pip install -e ".[dev]"`:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `pytest` | ≥ 8 | Test runner |
-| `pytest-asyncio` | ≥ 0.23 | Async test support |
+| `pytest-asyncio` | ≥ 0.23 | Declared but currently unused |
 | `black` | ≥ 24 | Code formatter |
 | `ruff` | ≥ 0.4 | Linter |
 | `mypy` | ≥ 1.10 | Static type checker |
@@ -119,7 +119,6 @@ These are **not on PyPI** — install from the release URLs:
 |---------|-------------|----------|----------|
 | [Groq](https://console.groq.com) | `GROQ_API_KEY` | `llama-3.3-70b-versatile` relation extraction | Yes |
 | [Anthropic](https://console.anthropic.com) | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` agent + confidence calibration | Yes |
-| Google | `GOOGLE_API_KEY` | Optional model fallback | No |
 
 ### Downloaded at Runtime
 
@@ -127,7 +126,7 @@ These are **not on PyPI** — install from the release URLs:
 |-------|------|-----------|
 | PubMedBERT sentence-transformer | ~400 MB | `~/.cache/huggingface/` |
 | Neo4j APOC plugin | ~50 MB | Docker volume `neo4j_plugins` |
-| Neo4j GDS plugin | ~150 MB | Docker volume `neo4j_plugins` |
+| Neo4j GDS plugin | ~150 MB | Docker volume `neo4j_plugins` (not used by the code yet) |
 
 ---
 
@@ -176,7 +175,7 @@ kg-from-scratch/
 ## App Features
 
 **Ask tab** — Chatbot with citations and confidence intervals
-- Agent makes up to 8 tool calls (entity lookup, graph path, semantic search)
+- Agent runs up to 8 reasoning turns, each with any number of tool calls (entity lookup, graph path, semantic search)
 - Every claim cited as `[paper_id § section]`
 - 95% CI displayed as `[lower, upper]` with High / Medium / Low label
 - Expandable tool trace and knowledge subgraph
@@ -204,7 +203,7 @@ Drop the new files into `data/papers/` (or `data/pdfs/`) and run:
 python scripts/build.py --resume
 ```
 
-`--resume` skips any chunk that already has edges in Neo4j, so only the new papers are processed. LLM extraction results for new chunks are cached automatically, making any future re-runs free.
+`--resume` skips any chunk already flagged as fully processed in Neo4j, so only the new papers (or chunks of an interrupted run) are processed. LLM extraction results for new chunks are cached automatically, making any future re-runs free.
 
 **How do I completely rebuild the graph from scratch?**
 
@@ -228,7 +227,7 @@ Two one-time downloads happen on first run: the PubMedBERT sentence-transformer 
 
 **Can I skip the embedding step to build faster?**
 
-Yes — use `--skip-embed`. The graph and keyword search will work, but semantic (vector) search in the chatbot won't. You can run embedding separately any time:
+Yes — use `--skip-embed`. The graph and keyword search will work; semantic (vector) search is skipped and the agent falls back to keyword search. You can run embedding separately any time:
 
 ```bash
 python scripts/build.py --skip-embed    # build graph only
@@ -250,7 +249,7 @@ In `data/cache/` as `<paper_id>__<chunk_index>.json`. Delete a file there to for
 
 **How do I view the raw graph?**
 
-Open the Neo4j browser at **http://localhost:7474** (login: `neo4j` / `password`) while `docker compose up -d` is running. Try `MATCH (n) RETURN n LIMIT 50` to explore.
+Open the Neo4j browser at **http://localhost:7474** (login: `neo4j` / your `NEO4J_PASSWORD`, default `password`; the port is bound to localhost only) while `docker compose up -d` is running. Try `MATCH (n) RETURN n LIMIT 50` to explore.
 
 ---
 
@@ -275,7 +274,6 @@ NEO4J_PASSWORD=password
 
 GROQ_API_KEY=           # required
 ANTHROPIC_API_KEY=      # required
-GOOGLE_API_KEY=         # optional
 
 LLM_MODEL=llama-3.3-70b-versatile
 AGENT_MODEL=claude-sonnet-4-6

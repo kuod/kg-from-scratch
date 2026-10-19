@@ -190,7 +190,7 @@ class GraphDB:
             "r.evidence_count AS evidence_count, "
             "r.confidence_lower AS confidence_lower, r.confidence_upper AS confidence_upper "
             "UNION "
-            f"MATCH (s)<-[r]-(src:{label} {{name: $name}}) "
+            f"MATCH (src)-[r]->(n:{label} {{name: $name}}) "
             "RETURN type(r) AS rel_type, labels(src)[0] AS tgt_label, src.name AS tgt_name, "
             "r.evidence_count AS evidence_count, "
             "r.confidence_lower AS confidence_lower, r.confidence_upper AS confidence_upper",

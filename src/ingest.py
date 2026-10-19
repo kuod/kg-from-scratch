@@ -58,6 +58,8 @@ def load_all_papers(papers_dir: Path | str | None = None) -> list[Chunk]:
 
 
 def _chunk_paper(paper_id: str, text: str) -> Iterator[Chunk]:
+    if not text.strip():
+        return
     sections = _split_into_sections(text)
     chunk_index = 0
     for section_title, section_text, char_offset in sections:

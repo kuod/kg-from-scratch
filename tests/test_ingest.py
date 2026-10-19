@@ -98,3 +98,8 @@ def test_empty_sections_skipped():
     sections = [c.section for c in chunks]
     assert "Empty" not in sections
     assert "Has Content" in sections
+
+
+def test_blank_file_yields_no_chunks():
+    for content in ("", "  \n\n\t\n"):
+        assert load_paper(_write_temp_md(content)) == []

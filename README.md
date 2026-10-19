@@ -88,7 +88,6 @@ Installed via `pip install -e ".[dev]"`:
 | `scispacy` | ≥ 0.5 | Biomedical NER framework |
 | `anthropic` | ≥ 0.30 | Claude API (agent + confidence calibration) |
 | `groq` | ≥ 0.9 | Groq API (relation extraction LLM) |
-| `openai` | ≥ 1.35 | Declared but currently unused |
 | `tqdm` | ≥ 4.66 | Progress bars |
 | `scipy` | ≥ 1.13 | Wilson score CI (normal distribution) |
 | `numpy` | ≥ 1.26 | Embedding arrays |
@@ -99,7 +98,6 @@ Installed via `pip install -e ".[dev]"`:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `pytest` | ≥ 8 | Test runner |
-| `pytest-asyncio` | ≥ 0.23 | Declared but currently unused |
 | `black` | ≥ 24 | Code formatter |
 | `ruff` | ≥ 0.4 | Linter |
 | `mypy` | ≥ 1.10 | Static type checker |

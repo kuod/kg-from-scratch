@@ -326,7 +326,7 @@ data/
 - NER: `scispacy` (+ two S3-hosted models installed separately)
 - PDF: `pymupdf4llm`, `pdfminer.six`
 - Stats: `scipy`, `numpy`, `pandas`, `tqdm`
-- Dev: `pytest`, `pytest-asyncio` (unused), `black`, `ruff`, `mypy`
+- Dev: `pytest`, `black`, `ruff`, `mypy`
 
 **External services** (require API keys in `.env`):
 - **Groq** (`GROQ_API_KEY`) — Extraction model (`llama-3.3-70b-versatile`)

@@ -44,7 +44,8 @@ def test_load_paper_returns_chunks():
     assert len(chunks) >= 3
     sections = [c.section for c in chunks]
     assert any("Introduction" in s for s in sections)
-    assert any("Methods" in s for s in sections)
+    # "## Methods" has an empty body (only a sub-header), so it is skipped
+    assert any("Cell culture" in s for s in sections)
     assert any("Results" in s for s in sections)
 
 

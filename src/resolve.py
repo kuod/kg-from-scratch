@@ -6,39 +6,42 @@ Pass 2: String normalization merge (lowercase + strip punctuation).
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.graph import GraphDB
 
-# Maps alias → canonical name (HGNC symbols, MONDO disease names, etc.)
-SYNONYM_GROUPS: dict[str, str] = {
-    # Genes / Proteins
+# Curated alias -> canonical name maps, keyed per entity label so that an alias
+# is only ever applied to nodes of a compatible type (a Gene called "MS" must
+# not become a disease). Deliberately excluded:
+#   * ambiguous short abbreviations (ms, ad, pd, tam, neu) that mean different
+#     things in different fields;
+#   * aliases that collapse distinct entities (pi3k, akt, erk, jnk, pdgf,
+#     vegf165, "braf v600e", "alk fusion"), because they drop isoform/mutation
+#     or family information.
+_GENE_SYNONYMS: dict[str, str] = {
     "p53": "TP53",
     "tumor protein p53": "TP53",
     "trp53": "TP53",
     "her2": "ERBB2",
     "her-2": "ERBB2",
-    "neu": "ERBB2",
     "c-erbb2": "ERBB2",
     "kras2": "KRAS",
     "k-ras": "KRAS",
-    "braf v600e": "BRAF",
     "egfr": "EGFR",
     "her1": "EGFR",
     "erbb1": "EGFR",
     "rb1": "RB1",
-    "retinoblastoma": "RB1",
     "pten": "PTEN",
     "mmac1": "PTEN",
     "brca-1": "BRCA1",
     "brca-2": "BRCA2",
-    "alk fusion": "ALK",
     "vegf": "VEGFA",
     "vegf-a": "VEGFA",
-    "vegf165": "VEGFA",
-    "pdgf": "PDGFA",
     "tgfb": "TGFB1",
     "tgf-beta": "TGFB1",
     "tgf-β": "TGFB1",
@@ -47,15 +50,12 @@ SYNONYM_GROUPS: dict[str, str] = {
     "nf-κb": "NFKB1",
     "mtor": "MTOR",
     "m-tor": "MTOR",
-    "pi3k": "PIK3CA",
-    "erk": "MAPK1",
     "erk2": "MAPK1",
-    "jnk": "MAPK8",
-    "jnk1": "MAPK8",
-    "akt": "AKT1",
     "pkb": "AKT1",
     "akt serine/threonine kinase 1": "AKT1",
-    # Diseases
+}
+
+_DISEASE_SYNONYMS: dict[str, str] = {
     "nsclc": "Non-small-cell lung carcinoma",
     "non-small cell lung cancer": "Non-small-cell lung carcinoma",
     "non small cell lung cancer": "Non-small-cell lung carcinoma",
@@ -75,14 +75,12 @@ SYNONYM_GROUPS: dict[str, str] = {
     "type 2 diabetes": "Type 2 diabetes mellitus",
     "t1d": "Type 1 diabetes mellitus",
     "type 1 diabetes": "Type 1 diabetes mellitus",
-    "ad": "Alzheimer's disease",
     "alzheimer": "Alzheimer's disease",
-    "pd": "Parkinson's disease",
     "parkinson": "Parkinson's disease",
-    "ms": "Multiple sclerosis",
-    # Drugs / Chemicals
+}
+
+_DRUG_SYNONYMS: dict[str, str] = {
     "tamoxifen": "Tamoxifen",
-    "tam": "Tamoxifen",
     "cisplatin": "Cisplatin",
     "cddp": "Cisplatin",
     "doxorubicin": "Doxorubicin",
@@ -105,7 +103,9 @@ SYNONYM_GROUPS: dict[str, str] = {
     "opdivo": "Nivolumab",
     "metformin": "Metformin",
     "glucophage": "Metformin",
-    # Pathways
+}
+
+_PATHWAY_SYNONYMS: dict[str, str] = {
     "wnt signaling": "Wnt signaling pathway",
     "wnt pathway": "Wnt signaling pathway",
     "mapk pathway": "MAPK signaling pathway",
@@ -120,6 +120,14 @@ SYNONYM_GROUPS: dict[str, str] = {
     "jak-stat": "JAK-STAT signaling pathway",
 }
 
+SYNONYM_GROUPS: dict[tuple[str, str], str] = {
+    **{("Gene", k): v for k, v in _GENE_SYNONYMS.items()},
+    **{("Protein", k): v for k, v in _GENE_SYNONYMS.items()},
+    **{("Disease", k): v for k, v in _DISEASE_SYNONYMS.items()},
+    **{("Drug", k): v for k, v in _DRUG_SYNONYMS.items()},
+    **{("Pathway", k): v for k, v in _PATHWAY_SYNONYMS.items()},
+}
+
 
 def _normalize(name: str) -> str:
     """Lowercase, strip punctuation, collapse whitespace."""
@@ -129,47 +137,92 @@ def _normalize(name: str) -> str:
     return name
 
 
-def resolve_synonyms(db: "GraphDB") -> int:
-    """Pass 1: merge nodes whose normalized name matches a SYNONYM_GROUPS key.
+# APOC merge config. Relationship/node properties are combined only for the
+# list-valued ones we know how to de-duplicate; everything else keeps the target
+# node's value. evidence_count is discarded here and recomputed afterwards from
+# source_chunk_ids, so 'combine' can never leave it as an array.
+_MERGE_CONFIG = (
+    "{properties: {`*`: 'discard', source_chunk_ids: 'combine', "
+    "aliases: 'combine', evidence_count: 'discard'}, mergeRels: true}"
+)
 
-    Returns count of merges performed.
+
+def _merge_nodes(db: "GraphDB", label: str, alias: str, canon: str) -> bool:
+    """Merge `alias` into `canon` via APOC. Returns True on success.
+
+    Failures (including APOC not being installed) are logged, never swallowed.
+    """
+    try:
+        db.run(
+            f"MATCH (alias:{label} {{name: $alias}}) "
+            f"MATCH (canon:{label} {{name: $canon}}) "
+            f"CALL apoc.refactor.mergeNodes([canon, alias], {_MERGE_CONFIG}) YIELD node "
+            "SET node.name = $canon, "
+            "    node.aliases = reduce(acc = [], x IN coalesce(node.aliases, []) + [$alias] | "
+            "      CASE WHEN x IN acc OR x = $canon THEN acc ELSE acc + [x] END) "
+            "RETURN node",
+            alias=alias, canon=canon,
+        )
+        # Re-derive evidence from the de-duplicated chunk ids on touched edges.
+        db.run(
+            f"MATCH (n:{label} {{name: $canon}})-[r]-() "
+            "WHERE r.source_chunk_ids IS NOT NULL "
+            "WITH DISTINCT r, apoc.coll.toSet(apoc.coll.flatten([r.source_chunk_ids])) AS ids "
+            "SET r.source_chunk_ids = ids, r.evidence_count = size(ids)",
+            canon=canon,
+        )
+        return True
+    except Exception:
+        logger.exception("Failed to merge %s %r into %r", label, alias, canon)
+        return False
+
+
+def apoc_available(db: "GraphDB") -> bool:
+    """True if the APOC procedures needed for merging are installed."""
+    try:
+        db.run("RETURN apoc.version() AS v")
+        return True
+    except Exception:
+        logger.exception("APOC is not available; node merges will fail")
+        return False
+
+
+def resolve_synonyms(db: "GraphDB") -> int:
+    """Pass 1: merge nodes whose name matches a (label, alias) SYNONYM_GROUPS key.
+
+    Returns count of merges performed. Failed merges are logged.
     """
     from src.graph import ENTITY_LABELS
 
     merged = 0
+    failed = 0
     for label in ENTITY_LABELS:
         nodes = db.run(f"MATCH (n:{label}) RETURN n.name AS name")
         for node in nodes:
             name_lower = node["name"].lower().strip()
-            canonical = SYNONYM_GROUPS.get(name_lower)
-            if canonical and canonical.lower() != name_lower:
-                # Check if canonical node exists; if not, rename in place
+            canonical = SYNONYM_GROUPS.get((label, name_lower))
+            if canonical and canonical != node["name"]:
                 canon_rows = db.run(
                     f"MATCH (c:{label} {{name: $canon}}) RETURN c.name AS name",
                     canon=canonical,
                 )
                 if canon_rows:
-                    # Merge alias into canonical using APOC
-                    try:
-                        db.run(
-                            f"MATCH (alias:{label} {{name: $alias}}) "
-                            f"MATCH (canon:{label} {{name: $canon}}) "
-                            "CALL apoc.refactor.mergeNodes([canon, alias], "
-                            "  {properties: 'combine', mergeRels: true}) YIELD node "
-                            "SET node.name=$canon "
-                            "RETURN node",
-                            alias=node["name"], canon=canonical,
-                        )
+                    if _merge_nodes(db, label, node["name"], canonical):
                         merged += 1
-                    except Exception:
-                        pass
+                    else:
+                        failed += 1
                 else:
-                    # Rename the alias node to canonical
+                    # Rename in place, remembering the old name as an alias
                     db.run(
-                        f"MATCH (n:{label} {{name: $old}}) SET n.name=$new",
+                        f"MATCH (n:{label} {{name: $old}}) "
+                        "SET n.aliases = reduce(acc = [], x IN coalesce(n.aliases, []) + [$old] | "
+                        "  CASE WHEN x IN acc THEN acc ELSE acc + [x] END), "
+                        "n.name=$new",
                         old=node["name"], new=canonical,
                     )
                     merged += 1
+    if failed:
+        logger.warning("Synonym pass: %d merge(s) failed", failed)
     return merged
 
 
@@ -177,11 +230,12 @@ def resolve_normalized_duplicates(db: "GraphDB") -> int:
     """Pass 2: merge nodes with identical normalized names.
 
     The node with the highest MENTIONED_IN edge count becomes canonical.
-    Returns count of merges performed.
+    Returns count of merges performed. Failed merges are logged.
     """
     from src.graph import ENTITY_LABELS
 
     merged = 0
+    failed = 0
     for label in ENTITY_LABELS:
         nodes = db.run(
             f"MATCH (n:{label}) "
@@ -194,27 +248,21 @@ def resolve_normalized_duplicates(db: "GraphDB") -> int:
         for node in nodes:
             norm = _normalize(node["name"])
             if norm in norm_to_canonical:
-                canonical = norm_to_canonical[norm]
-                try:
-                    db.run(
-                        f"MATCH (alias:{label} {{name: $alias}}) "
-                        f"MATCH (canon:{label} {{name: $canon}}) "
-                        "CALL apoc.refactor.mergeNodes([canon, alias], "
-                        "  {properties: 'combine', mergeRels: true}) YIELD node "
-                        "SET node.name=$canon "
-                        "RETURN node",
-                        alias=node["name"], canon=canonical,
-                    )
+                if _merge_nodes(db, label, node["name"], norm_to_canonical[norm]):
                     merged += 1
-                except Exception:
-                    pass
+                else:
+                    failed += 1
             else:
                 norm_to_canonical[norm] = node["name"]
+    if failed:
+        logger.warning("Normalization pass: %d merge(s) failed", failed)
     return merged
 
 
 def run_resolution(db: "GraphDB") -> None:
     """Run both resolution passes and print a summary."""
+    if not apoc_available(db):
+        print("  WARNING: APOC not available - alias merges will fail (renames still apply).")
     print("Pass 1: synonym merge...")
     n1 = resolve_synonyms(db)
     print(f"  Merged {n1} alias nodes.")

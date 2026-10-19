@@ -1,7 +1,7 @@
 """
 Markdown → Chunk dataclasses.
 
-Splits a paper's markdown into sections using ATX headers (##) and
+Splits a paper's markdown into sections using ATX headers (#..######; the first # is the title) and
 standalone bold lines (**...**), then applies a sliding window for
 sections longer than CHUNK_MAX_WORDS.
 """
@@ -33,11 +33,17 @@ class Chunk:
         self.word_count = len(self.text.split())
 
 
-# Match ATX headers (## or deeper) and standalone **bold lines**
+# Match ATX headers (# through ######) and standalone **bold lines**.
+# [ \t]+ (not \s+) so a bare "##" never swallows the next line as its title.
 _HEADER_RE = re.compile(
-    r"^(#{2,6}\s+.+|(?:\*\*[^*\n]+\*\*)\s*)$",
+    r"^(#{1,6}[ \t]+.+|(?:\*\*[^*\n]+\*\*)[ \t]*)$",
     re.MULTILINE,
 )
+# Bold-only caption lines such as "**Figure 1.**" are not section headers.
+_CAPTION_RE = re.compile(
+    r"^\*\*\s*(?:fig(?:ure)?s?\.?|tables?|supplementary)\s*[S]?\d", re.IGNORECASE
+)
+_H1_RE = re.compile(r"^#[ \t]+")
 
 
 def load_paper(path: Path | str) -> list[Chunk]:
@@ -87,7 +93,13 @@ def _chunk_paper(paper_id: str, text: str) -> Iterator[Chunk]:
 
 def _split_into_sections(text: str) -> list[tuple[str, str, int]]:
     """Return list of (header, body, char_offset) tuples."""
-    matches = list(_HEADER_RE.finditer(text))
+    matches = [m for m in _HEADER_RE.finditer(text) if not _CAPTION_RE.match(m.group(0))]
+    # The first "# ..." line is the paper title, not a section: leave it in the
+    # preamble. Any later "# ..." line is a real section header.
+    for i, m in enumerate(matches):
+        if _H1_RE.match(m.group(0)):
+            del matches[i]
+            break
     if not matches:
         return [("Introduction", text, 0)]
 
@@ -111,7 +123,7 @@ def _split_into_sections(text: str) -> list[tuple[str, str, int]]:
 def _clean_header(raw: str) -> str:
     """Strip markdown syntax from a header line."""
     h = raw.strip()
-    h = re.sub(r"^#{2,6}\s+", "", h)
+    h = re.sub(r"^#{1,6}[ \t]+", "", h)
     h = re.sub(r"^\*\*(.+)\*\*$", r"\1", h)
     return h.strip()
 

@@ -20,7 +20,7 @@ from typing import Any
 import anthropic  # type: ignore
 
 from src.config import AGENT_MODEL
-from src.graph import GraphDB, ENTITY_LABELS
+from src.graph import GraphDB, ENTITY_LABELS, check_label
 from src.embed import query_similar_chunks
 from src.confidence import calibrate_answer_confidence
 
@@ -247,13 +247,11 @@ def _execute_tool(name: str, inputs: dict, db: GraphDB) -> Any:
         )
 
     if name == "get_edge_confidence":
-        rel = inputs["relationship"].upper()
-        rows = db.run(
-            f"MATCH (s:{inputs['source_type']} {{name: $src}})-[r:{rel}]->(t:{inputs['target_type']} {{name: $tgt}}) "
-            "RETURN r.confidence_lower AS lower, r.confidence_upper AS upper, r.evidence_count AS evidence_count",
-            src=inputs["source_name"], tgt=inputs["target_name"],
+        return db.get_edge_confidence(
+            inputs["source_type"], inputs["source_name"],
+            inputs["relationship"].upper(),
+            inputs["target_type"], inputs["target_name"],
         )
-        return rows[0] if rows else {"lower": None, "upper": None, "evidence_count": 0}
 
     return {"error": f"Unknown tool: {name}"}
 
@@ -271,7 +269,7 @@ def _rank_papers(query: str, top_k: int, db: GraphDB) -> list[dict]:
 
 
 def _search_entity(name: str, entity_type: str, db: GraphDB) -> list[dict]:
-    labels = ENTITY_LABELS if entity_type == "Any" else [entity_type]
+    labels = ENTITY_LABELS if entity_type == "Any" else [check_label(entity_type)]
     results = []
     for label in labels:
         rows = db.run(

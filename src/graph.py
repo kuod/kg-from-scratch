@@ -22,6 +22,23 @@ RELATIONSHIP_TYPES = [
 ]
 
 
+def check_label(label: str) -> str:
+    """Return label if it is a known entity label, else raise ValueError.
+
+    Labels and relationship types cannot be passed as Cypher parameters, so they
+    are interpolated into queries; they must therefore come from an allow-list.
+    """
+    if label not in ENTITY_LABELS:
+        raise ValueError(f"Unknown entity label: {label!r}")
+    return label
+
+
+def check_rel_type(rel_type: str) -> str:
+    if rel_type not in RELATIONSHIP_TYPES:
+        raise ValueError(f"Unknown relationship type: {rel_type!r}")
+    return rel_type
+
+
 class GraphDB:
     def __init__(
         self,
@@ -121,6 +138,7 @@ class GraphDB:
 
     def upsert_mention(self, entity_label: str, entity_name: str, chunk_id: str) -> None:
         """Link an entity to the chunk that mentions it."""
+        check_label(entity_label)
         self.run(
             f"MATCH (e:{entity_label} {{name: $name}}) "
             "MATCH (c:Chunk {id: $chunk_id}) "
@@ -142,6 +160,8 @@ class GraphDB:
         """Upsert a relationship between two entities, tracking evidence."""
         if rel_type not in RELATIONSHIP_TYPES:
             rel_type = "ASSOCIATED_WITH"
+        check_label(src_label)
+        check_label(tgt_label)
         self.run(
             f"MATCH (s:{src_label} {{name: $src}}) "
             f"MATCH (t:{tgt_label} {{name: $tgt}}) "
@@ -170,6 +190,8 @@ class GraphDB:
     ) -> None:
         if rel_type not in RELATIONSHIP_TYPES:
             rel_type = "ASSOCIATED_WITH"
+        check_label(src_label)
+        check_label(tgt_label)
         self.run(
             f"MATCH (s:{src_label} {{name: $src}}) "
             f"MATCH (t:{tgt_label} {{name: $tgt}}) "
@@ -185,11 +207,13 @@ class GraphDB:
         if is_chunk:
             self.run("MATCH (c:Chunk {id: $id}) SET c.embedding=$emb", id=name_or_id, emb=embedding)
         else:
+            check_label(label)
             self.run(f"MATCH (n:{label} {{name: $name}}) SET n.embedding=$emb", name=name_or_id, emb=embedding)
 
     # ------------------------------------------------------------------ queries
 
     def get_entity_relationships(self, label: str, name: str) -> list[dict[str, Any]]:
+        check_label(label)
         return self.run(
             f"MATCH (s:{label} {{name: $name}})-[r]->(t) "
             "RETURN type(r) AS rel_type, labels(t)[0] AS tgt_label, t.name AS tgt_name, "
@@ -212,12 +236,29 @@ class GraphDB:
         )
 
     def find_path(self, src_label: str, src_name: str, tgt_label: str, tgt_name: str, max_hops: int = 4) -> list[dict]:
+        check_label(src_label)
+        check_label(tgt_label)
+        max_hops = max(1, min(int(max_hops), 6))
         return self.run(
             f"MATCH p=shortestPath((s:{src_label} {{name: $src}})-[*1..{max_hops}]-(t:{tgt_label} {{name: $tgt}})) "
             "RETURN [n IN nodes(p) | n.name] AS node_names, "
             "[r IN relationships(p) | type(r)] AS rel_types",
             src=src_name, tgt=tgt_name,
         )
+
+    def get_edge_confidence(
+        self, src_label: str, src_name: str, rel_type: str, tgt_label: str, tgt_name: str
+    ) -> dict[str, Any]:
+        check_label(src_label)
+        check_label(tgt_label)
+        check_rel_type(rel_type)
+        rows = self.run(
+            f"MATCH (s:{src_label} {{name: $src}})-[r:{rel_type}]->(t:{tgt_label} {{name: $tgt}}) "
+            "RETURN r.confidence_lower AS lower, r.confidence_upper AS upper, "
+            "r.evidence_count AS evidence_count",
+            src=src_name, tgt=tgt_name,
+        )
+        return rows[0] if rows else {"lower": None, "upper": None, "evidence_count": 0}
 
     def get_graph_stats(self) -> dict[str, Any]:
         stats: dict[str, Any] = {}

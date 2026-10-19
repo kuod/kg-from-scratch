@@ -35,3 +35,32 @@ def test_relationship_evidence_only_increments_for_new_chunk(recdb):
 def test_mention_count_is_not_incremented_on_rerun(recdb):
     recdb.upsert_mention("Gene", "TP53", "p__0000")
     assert "r.count+1" not in recdb.calls[0][0]
+
+
+import pytest
+
+
+@pytest.mark.parametrize("bad", ["Gene) DETACH DELETE (x", "Chunk", "", "gene"])
+def test_unknown_labels_are_rejected(recdb, bad):
+    with pytest.raises(ValueError):
+        recdb.get_entity_relationships(bad, "TP53")
+    with pytest.raises(ValueError):
+        recdb.find_path(bad, "a", "Gene", "b")
+    with pytest.raises(ValueError):
+        recdb.get_edge_confidence(bad, "a", "INHIBITS", "Gene", "b")
+    with pytest.raises(ValueError):
+        recdb.upsert_mention(bad, "a", "c")
+    assert recdb.calls == []  # nothing reached the database
+
+
+def test_unknown_relationship_type_rejected_for_edge_confidence(recdb):
+    with pytest.raises(ValueError):
+        recdb.get_edge_confidence("Gene", "a", "X]-() DETACH DELETE (n //", "Gene", "b")
+    assert recdb.calls == []
+
+
+def test_find_path_max_hops_is_bounded_int(recdb):
+    recdb.find_path("Gene", "a", "Gene", "b", max_hops="3")
+    assert "[*1..3]" in recdb.calls[0][0]
+    with pytest.raises(ValueError):
+        recdb.find_path("Gene", "a", "Gene", "b", max_hops="1] DELETE")

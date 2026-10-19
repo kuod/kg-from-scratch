@@ -1,0 +1,22 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Unit tests need no GPU, scispaCy models, Neo4j or API keys, so install
+      # only the light dependencies they import.
+      - run: pip install pytest python-dotenv scipy neo4j anthropic pandas tqdm
+      - run: python -m pytest tests -q

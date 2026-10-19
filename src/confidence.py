@@ -22,10 +22,7 @@ def wilson_ci(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     """
     if n == 0:
         return (0.0, 1.0)
-    if k == 0:
-        return (0.0, 0.0)
-    if k == n:
-        return (1.0, 1.0)
+    k = max(0, min(k, n))
 
     # z for two-tailed 95% CI
     z = _z_score(1.0 - alpha / 2.0)

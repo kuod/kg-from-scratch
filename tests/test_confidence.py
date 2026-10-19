@@ -5,14 +5,14 @@ from src.confidence import wilson_ci, _validate_confidence
 
 def test_wilson_ci_all_evidence():
     lo, hi = wilson_ci(k=5, n=5)
-    assert lo > 0.5
+    assert 0.5 < lo < 1.0  # not a degenerate [1, 1] interval
     assert hi == 1.0
 
 
 def test_wilson_ci_no_evidence():
     lo, hi = wilson_ci(k=0, n=5)
     assert lo == 0.0
-    assert hi == 0.0
+    assert 0.0 < hi < 0.5  # not a degenerate [0, 0] interval
 
 
 def test_wilson_ci_zero_total():
@@ -38,7 +38,7 @@ def test_wilson_ci_returns_valid_range():
 
 def test_wilson_ci_single_observation():
     lo, hi = wilson_ci(k=1, n=1)
-    assert lo == 1.0
+    assert lo == pytest.approx(0.2065, abs=1e-3)
     assert hi == 1.0
 
 
@@ -67,3 +67,8 @@ def test_validate_confidence_swaps_inverted_bounds():
 def test_validate_confidence_invalid_label():
     result = _validate_confidence({"label": "Very High"})
     assert result["label"] in ("High", "Medium", "Low")
+
+
+def test_wilson_ci_known_value():
+    lo, hi = wilson_ci(k=5, n=5)
+    assert lo == pytest.approx(0.5655, abs=1e-3)

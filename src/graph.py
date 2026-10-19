@@ -110,6 +110,16 @@ class GraphDB:
             id=chunk_id, paper_id=paper_id, section=section, chunk_index=chunk_index, text=text,
         )
 
+    def mark_chunk_processed(self, chunk_id: str) -> None:
+        """Flag a chunk once its entities/relationships have been fully written."""
+        self.run("MATCH (c:Chunk {id: $id}) SET c.processed=true", id=chunk_id)
+
+    def is_chunk_processed(self, chunk_id: str) -> bool:
+        rows = self.run(
+            "MATCH (c:Chunk {id: $id}) RETURN coalesce(c.processed, false) AS done", id=chunk_id
+        )
+        return bool(rows and rows[0]["done"])
+
     def upsert_entity(
         self,
         label: str,

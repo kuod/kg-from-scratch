@@ -72,3 +72,11 @@ def test_validate_confidence_invalid_label():
 def test_wilson_ci_known_value():
     lo, hi = wilson_ci(k=5, n=5)
     assert lo == pytest.approx(0.5655, abs=1e-3)
+
+
+def test_format_ci_handles_missing_and_nan():
+    from src.confidence import format_ci
+
+    assert format_ci(0.1234, 0.9) == "[0.12, 0.90]"
+    assert format_ci(None, None) == "—"
+    assert format_ci(float("nan"), float("nan")) == "—"

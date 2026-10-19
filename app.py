@@ -16,6 +16,8 @@ import tempfile, os
 
 from src.graph import GraphDB, ENTITY_LABELS
 from src.agent import ask_with_confidence
+from src.config import NEO4J_URI
+from src.confidence import format_ci
 
 st.set_page_config(page_title="BioKG Chatbot", layout="wide")
 
@@ -32,7 +34,7 @@ with st.sidebar:
     st.title("BioKG Navigator")
     st.caption("Biomedical Knowledge Graph Q&A")
     st.divider()
-    st.markdown("**Graph connection:** `bolt://localhost:7687`")
+    st.markdown(f"**Graph connection:** `{NEO4J_URI}`")
     try:
         stats = db.get_graph_stats()
         st.metric("Papers", stats.get("Paper", 0))
@@ -220,8 +222,7 @@ with tab_explore:
                 import pandas as pd
                 df = pd.DataFrame(rels)
                 df["CI"] = df.apply(
-                    lambda r: f"[{r['confidence_lower']:.2f}, {r['confidence_upper']:.2f}]"
-                    if r.get("confidence_lower") is not None else "—", axis=1
+                    lambda r: format_ci(r["confidence_lower"], r["confidence_upper"]), axis=1
                 )
                 st.dataframe(df[["rel_type", "tgt_label", "tgt_name", "evidence_count", "CI"]], use_container_width=True)
             else:

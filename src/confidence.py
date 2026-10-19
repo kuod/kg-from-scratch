@@ -37,6 +37,17 @@ def wilson_ci(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     return (round(lower, 4), round(upper, 4))
 
 
+def format_ci(lower: Any, upper: Any) -> str:
+    """Render a CI as '[lo, hi]'; a dash when either bound is missing/NaN."""
+    try:
+        lo, hi = float(lower), float(upper)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isnan(lo) or math.isnan(hi):
+        return "—"
+    return f"[{lo:.2f}, {hi:.2f}]"
+
+
 def _z_score(p: float) -> float:
     """Inverse CDF of standard normal using scipy if available, else approximation."""
     try:

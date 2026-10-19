@@ -42,77 +42,6 @@ with st.sidebar:
     except Exception as e:
         st.error(f"Neo4j connection failed: {e}")
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_ask, tab_explore, tab_papers, tab_stats = st.tabs(["Ask", "Graph Explorer", "Papers", "Stats"])
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 1 — ASK
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-with tab_ask:
-    st.header("Ask the Knowledge Graph")
-
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-
-    # Render previous turns
-    for turn in st.session_state.chat_history:
-        with st.chat_message("user"):
-            st.write(turn["question"])
-        with st.chat_message("assistant"):
-            st.markdown(turn["answer"])
-            _render_confidence(turn["confidence"])
-            if turn.get("tool_trace"):
-                with st.expander("Tool calls", expanded=False):
-                    for t in turn["tool_trace"]:
-                        st.markdown(f"**{t['tool']}**")
-                        st.json(t["input"])
-                        st.json(t["output"])
-
-    question = st.chat_input("Ask about genes, drugs, diseases, pathways…")
-    if question:
-        with st.chat_message("user"):
-            st.write(question)
-
-        with st.chat_message("assistant"):
-            with st.status("Searching knowledge graph…", expanded=True) as status:
-                answer, chunk_ids, confidence, tool_trace = ask_with_confidence(question, db)
-                status.update(label="Done", state="complete", expanded=False)
-
-            st.markdown(answer)
-            _render_confidence(confidence)
-
-            if chunk_ids:
-                with st.expander("Evidence chunks", expanded=False):
-                    for cid in chunk_ids[:6]:
-                        rows = db.run("MATCH (c:Chunk {id: $id}) RETURN c.paper_id AS pid, c.section AS sec, c.text AS text", id=cid)
-                        if rows:
-                            st.markdown(f"**[{rows[0]['pid']} § {rows[0]['sec']}]**")
-                            st.caption(rows[0]["text"][:500])
-
-            if tool_trace:
-                with st.expander("Tool calls", expanded=False):
-                    for t in tool_trace:
-                        st.markdown(f"**{t['tool']}**")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.caption("Input")
-                            st.json(t["input"])
-                        with col2:
-                            st.caption("Output")
-                            st.json(t["output"])
-
-            # Knowledge subgraph for entity mentions
-            if chunk_ids:
-                _render_subgraph(chunk_ids[:3], db)
-
-        st.session_state.chat_history.append({
-            "question": question,
-            "answer": answer,
-            "confidence": confidence,
-            "tool_trace": tool_trace,
-        })
-
-
 def _render_confidence(conf: dict) -> None:
     label = conf.get("label", "Medium")
     score = conf.get("score", 50)
@@ -184,6 +113,77 @@ def _render_subgraph(chunk_ids: list[str], db: GraphDB) -> None:
 
     with st.expander("Knowledge subgraph", expanded=False):
         st.components.v1.html(html, height=370)
+
+
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tab_ask, tab_explore, tab_papers, tab_stats = st.tabs(["Ask", "Graph Explorer", "Papers", "Stats"])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 1 — ASK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab_ask:
+    st.header("Ask the Knowledge Graph")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    # Render previous turns
+    for turn in st.session_state.chat_history:
+        with st.chat_message("user"):
+            st.write(turn["question"])
+        with st.chat_message("assistant"):
+            st.markdown(turn["answer"])
+            _render_confidence(turn["confidence"])
+            if turn.get("tool_trace"):
+                with st.expander("Tool calls", expanded=False):
+                    for t in turn["tool_trace"]:
+                        st.markdown(f"**{t['tool']}**")
+                        st.json(t["input"])
+                        st.json(t["output"])
+
+    question = st.chat_input("Ask about genes, drugs, diseases, pathways…")
+    if question:
+        with st.chat_message("user"):
+            st.write(question)
+
+        with st.chat_message("assistant"):
+            with st.status("Searching knowledge graph…", expanded=True) as status:
+                answer, chunk_ids, confidence, tool_trace = ask_with_confidence(question, db)
+                status.update(label="Done", state="complete", expanded=False)
+
+            st.markdown(answer)
+            _render_confidence(confidence)
+
+            if chunk_ids:
+                with st.expander("Evidence chunks", expanded=False):
+                    for cid in chunk_ids[:6]:
+                        rows = db.run("MATCH (c:Chunk {id: $id}) RETURN c.paper_id AS pid, c.section AS sec, c.text AS text", id=cid)
+                        if rows:
+                            st.markdown(f"**[{rows[0]['pid']} § {rows[0]['sec']}]**")
+                            st.caption(rows[0]["text"][:500])
+
+            if tool_trace:
+                with st.expander("Tool calls", expanded=False):
+                    for t in tool_trace:
+                        st.markdown(f"**{t['tool']}**")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.caption("Input")
+                            st.json(t["input"])
+                        with col2:
+                            st.caption("Output")
+                            st.json(t["output"])
+
+            # Knowledge subgraph for entity mentions
+            if chunk_ids:
+                _render_subgraph(chunk_ids[:3], db)
+
+        st.session_state.chat_history.append({
+            "question": question,
+            "answer": answer,
+            "confidence": confidence,
+            "tool_trace": tool_trace,
+        })
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

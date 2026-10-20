@@ -61,8 +61,10 @@ All other values have working defaults. `docker-compose.yml` reads `NEO4J_PASSWO
 | `GROQ_API_KEY` | *(required)* | Extraction LLM (llama-3.3-70b) |
 | `ANTHROPIC_API_KEY` | *(required)* | Agent QA (claude-sonnet-4-6) |
 | `LLM_MODEL` | `llama-3.3-70b-versatile` | Relation extraction model |
+| `LLM_FALLBACK_MODEL` | `claude-haiku-4-5-20251001` | Anthropic fallback extraction model, used if Groq fails |
 | `AGENT_MODEL` | `claude-sonnet-4-6` | Chatbot agent model |
 | `EMBED_MODEL` | `pritamdeka/PubMedBERT-...` | Sentence embedding model |
+| `SCISPACY_MODEL` | `en_core_sci_lg` | scispaCy NER model |
 | `USE_LOGPROB_CI` | `false` | Enable log-probability confidence intervals |
 
 ---
@@ -98,6 +100,9 @@ python scripts/convert_pdfs.py
 
 # Convert a single file
 python scripts/convert_pdfs.py --pdf data/pdfs/my_paper.pdf
+
+# Write the markdown somewhere other than data/papers/
+python scripts/convert_pdfs.py --out-dir path/to/output
 ```
 
 The converter uses `pymupdf4llm` (layout-aware, handles multi-column and tables) with a `pdfminer.six` fallback. Encrypted or image-only (scanned) PDFs will fail — use OCR to produce a text PDF first.
@@ -123,8 +128,8 @@ This runs four steps in sequence:
 | Step | What happens |
 |------|-------------|
 | **1. PDF → Markdown** | Converts any PDFs in `data/pdfs/` (skipped if `--skip-pdf`) |
-| **2. Graph population** | Chunks each paper, runs scispaCy NER, calls Groq LLM for entity/relation extraction, upserts everything into Neo4j. LLM results are cached in `data/cache/` — re-runs are free. |
-| **3. Entity resolution** | Merges aliases to canonical names (e.g., `p53 → TP53`) and deduplicates by string normalization via APOC |
+| **2. Graph population** | Chunks each paper, runs scispaCy NER, calls Groq LLM for entity/relation extraction, upserts everything into Neo4j, then computes Wilson CI bounds on edges. LLM results are cached in `data/cache/` — re-runs are free. |
+| **3. Entity resolution + cleanup** | Merges aliases to canonical names (e.g., `p53 → TP53`), deduplicates by string normalization via APOC, then removes noise nodes and self-loop edges |
 | **4. Embedding** | Encodes all nodes with PubMedBERT (768-dim) and creates vector indexes for semantic search |
 
 **Useful flags:**

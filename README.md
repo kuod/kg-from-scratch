@@ -21,8 +21,11 @@ PDF / Markdown
 Markdown chunks
      │
      ├─▶ NER (scispaCy)   ─┐
-     └─▶ LLM extraction    ├─▶ Neo4j graph ─▶ Entity resolution
+     └─▶ LLM extraction    ├─▶ Neo4j graph ─▶ Edge confidence (Wilson CI)
           (Groq llama-3.3) ┘       │
+                                   ▼
+                          Entity resolution ─▶ Graph cleanup
+                                   │
                                    ▼
                           PubMedBERT embeddings
                           + vector indexes
@@ -109,7 +112,7 @@ These are **not on PyPI** — install from the release URLs:
 | Model | URL | Purpose |
 |-------|-----|---------|
 | `en_core_sci_lg` | `https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_lg-0.5.4.tar.gz` | General biomedical NER (UMLS semantic types) |
-| `en_ner_bc5cdr_md` | `https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz` | Disease + drug NER with UMLS CUI linking |
+| `en_ner_bc5cdr_md` | `https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz` | Disease + drug NER (no UMLS linking; the optional UMLS linker is attached to `en_core_sci_lg`) |
 
 ### External Services
 
@@ -163,9 +166,17 @@ kg-from-scratch/
 │   └── convert_pdfs.py       # Batch PDF → Markdown
 │
 └── tests/
+    ├── test_agent.py
+    ├── test_build_resume.py
+    ├── test_clean_graph.py
+    ├── test_confidence.py
+    ├── test_dependencies.py
+    ├── test_extract.py
+    ├── test_graph_queries.py
     ├── test_ingest.py
     ├── test_ner.py
-    └── test_confidence.py
+    ├── test_pdf_convert.py
+    └── test_resolve.py
 ```
 
 ---
@@ -243,7 +254,7 @@ The converter tries `pymupdf4llm` first, then falls back to `pdfminer.six`. If b
 
 **Where are LLM extraction results cached?**
 
-In `data/cache/` as `<paper_id>__<chunk_index>.json`. Each entry is keyed on a hash of the model (`LLM_MODEL`, `LLM_FALLBACK_MODEL`), the system prompt and `PROMPT_VERSION` in `src/extract.py`, call settings, the NER hints and the chunk text. Changing any of these makes that chunk a cache miss and it is re-extracted. If you edit the prompt template or user-message format, bump `PROMPT_VERSION`.
+In `data/cache/` as `<paper_id>__<chunk_index:04d>.json` (zero-padded). Each entry is keyed on a hash of the model (`LLM_MODEL`, `LLM_FALLBACK_MODEL`), the system prompt and `PROMPT_VERSION` in `src/extract.py`, call settings, the NER hints and the chunk text. Changing any of these makes that chunk a cache miss and it is re-extracted. If you edit the prompt template or user-message format, bump `PROMPT_VERSION`.
 
 > **Upgrade warning: this invalidates existing caches.** Cache files written by earlier versions have no model/prompt key. They are treated as misses (a `Legacy cache entry ...` warning is logged) and the **next build re-calls the LLM for every chunk, which costs API spend.** Check `--cache-status` first if unsure.
 
@@ -268,7 +279,7 @@ Open the Neo4j browser at **http://localhost:7474** (login: `neo4j` / your `NEO4
 pytest tests/
 ```
 
-Tests for `ingest`, `ner`, and `confidence` run without Neo4j or API keys.
+All tests are stubbed: none needs Neo4j, API keys or scispaCy models.
 
 ---
 
@@ -285,6 +296,7 @@ GROQ_API_KEY=           # required
 ANTHROPIC_API_KEY=      # required
 
 LLM_MODEL=llama-3.3-70b-versatile
+LLM_FALLBACK_MODEL=claude-haiku-4-5-20251001
 AGENT_MODEL=claude-sonnet-4-6
 EMBED_MODEL=pritamdeka/PubMedBERT-mnli-snli-scinli-scitail-mednli-stsb
 SCISPACY_MODEL=en_core_sci_lg

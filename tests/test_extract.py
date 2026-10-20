@@ -37,7 +37,7 @@ def test_corrupt_cache_file_is_re_extracted(tmp_path, monkeypatch):
     monkeypatch.setattr(extract, "_call_llm", lambda *a: {"entities": [], "relationships": []})
     out = extract.extract_from_chunk(chunk, [])
     assert out["entities"] == []
-    assert json.loads((tmp_path / "p__0000.json").read_text())["_text_key"]
+    assert json.loads((tmp_path / "p__0000.json").read_text())["_cache_key"]
     assert not list(tmp_path.glob("*.tmp"))
 
 

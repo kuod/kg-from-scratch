@@ -209,7 +209,7 @@ python scripts/build.py --resume
 python scripts/build.py --clear
 ```
 
-This wipes all nodes and edges before rebuilding. Cached extraction results in `data/cache/` are preserved, so the LLM step is still fast.
+This wipes all nodes and edges before rebuilding. Cached extraction results in `data/cache/` are preserved, so the LLM step is still fast (as long as the model, prompt and settings are unchanged; see the cache FAQ below).
 
 **Can I process a single paper without touching the rest of the graph?**
 
@@ -235,7 +235,7 @@ python -c "from src.graph import GraphDB; from src.embed import embed_all_nodes;
 
 **How do I swap the extraction model?**
 
-Set `LLM_MODEL` in `.env` to any model supported by Groq (e.g. `llama-3.1-8b-instant` for faster/cheaper runs, `llama-3.3-70b-versatile` for higher quality). The Anthropic SDK is used as a silent fallback if Groq fails.
+Set `LLM_MODEL` in `.env` to any model supported by Groq (e.g. `llama-3.1-8b-instant` for faster/cheaper runs, `llama-3.3-70b-versatile` for higher quality). The Anthropic SDK is used as a fallback if Groq fails (model set by `LLM_FALLBACK_MODEL`, default `claude-haiku-4-5-20251001`). The extraction cache is keyed on the model, so after changing `LLM_MODEL` the affected chunks are re-extracted (this costs LLM calls); see the cache FAQ.
 
 **What happens if a PDF fails to convert?**
 
@@ -243,7 +243,18 @@ The converter tries `pymupdf4llm` first, then falls back to `pdfminer.six`. If b
 
 **Where are LLM extraction results cached?**
 
-In `data/cache/` as `<paper_id>__<chunk_index>.json`. Delete a file there to force re-extraction of that chunk, or delete the whole folder to re-extract everything.
+In `data/cache/` as `<paper_id>__<chunk_index>.json`. Each entry is keyed on a hash of the model (`LLM_MODEL`, `LLM_FALLBACK_MODEL`), the system prompt and `PROMPT_VERSION` in `src/extract.py`, call settings, the NER hints and the chunk text. Changing any of these makes that chunk a cache miss and it is re-extracted. If you edit the prompt template or user-message format, bump `PROMPT_VERSION`.
+
+> **Upgrade warning: this invalidates existing caches.** Cache files written by earlier versions have no model/prompt key. They are treated as misses (a `Legacy cache entry ...` warning is logged) and the **next build re-calls the LLM for every chunk, which costs API spend.** Check `--cache-status` first if unsure.
+
+Inspect and clean the cache without any LLM calls:
+
+```bash
+python -m src.extract --cache-status   # counts: current / stale / legacy / corrupt
+python -m src.extract --purge-stale    # delete everything that is not current
+```
+
+"Stale" means produced under a different model/prompt/settings; "legacy" means written before keys existed. Purging is optional (stale entries are simply overwritten when re-extracted) but reclaims disk. You can still delete individual files, or the whole folder, to force re-extraction.
 
 **How do I view the raw graph?**
 

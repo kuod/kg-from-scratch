@@ -90,10 +90,10 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
   - Entry point: `extract_entities_ner(text: str) → list[NEREntity]`
 
 - **`src/extract.py`** — LLM-based Relation Extraction
-  - Calls Groq `llama-3.3-70b-versatile` (configurable via `LLM_MODEL` env var)
+  - Calls Groq `llama-3.3-70b-versatile` (configurable via `LLM_MODEL` env var); fallback Anthropic model via `LLM_FALLBACK_MODEL`
   - Prompt injects NER results to guide extraction
   - Returns JSON: `{entities: [...], relationships: [...]}`
-  - **Caching**: Results stored in `data/cache/<paper_id>__<chunk_index>.json` (disk cache makes re-runs free)
+  - **Caching**: Results stored in `data/cache/<paper_id>__<chunk_index>.json` keyed on a hash of model(s) + system prompt + `PROMPT_VERSION` + call settings + NER hints + chunk text (`_cache_key`, stored with `_config_key`). Changing any of them is a miss. Bump `PROMPT_VERSION` when editing the user-message template. Pre-key (legacy) files are logged and treated as misses (re-calls the LLM = spend; this invalidated all pre-existing caches). `python -m src.extract --cache-status` / `--purge-stale` report/delete stale entries
   - Fallback: If Groq fails, uses Anthropic SDK
   - Entry point: `extract_from_chunk(chunk: Chunk, ner_entities: list[NEREntity]) → dict`
 
@@ -197,7 +197,7 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
 
 - **`src/config.py`** — Centralized env var loading
   - Neo4j: `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
-  - LLM: `LLM_MODEL` (default: `llama-3.3-70b-versatile`), `GROQ_API_KEY`
+  - LLM: `LLM_MODEL` (default: `llama-3.3-70b-versatile`), `LLM_FALLBACK_MODEL` (default: `claude-haiku-4-5-20251001`), `GROQ_API_KEY`
   - Agent: `AGENT_MODEL` (default: `claude-sonnet-4-6`), `ANTHROPIC_API_KEY`
   - Embedding: `EMBED_MODEL` (default: PubMedBERT), `SCISPACY_MODEL` (default: `en_core_sci_lg`)
   - Chunking: `CHUNK_MAX_WORDS=1200`, `CHUNK_WINDOW_WORDS=600`, `CHUNK_OVERLAP_WORDS=150`
@@ -300,7 +300,7 @@ Code style:
 
 **Neo4j connection errors:** Ensure `docker compose up -d` is running and `NEO4J_PASSWORD` in `.env` matches `docker-compose.yml`.
 
-**LLM extraction cache:** Delete `data/cache/` to force re-extraction of all chunks, or delete individual `<paper_id>__<chunk_index>.json` files.
+**LLM extraction cache:** Entries auto-invalidate when model/prompt/settings change (the first build after upgrading to keyed caches re-calls the LLM for everything). `python -m src.extract --cache-status` shows stale counts; `--purge-stale` deletes them. Or delete `data/cache/` / individual `<paper_id>__<chunk_index>.json` files.
 
 **Embedding model downloads (first run only):** PubMedBERT (~400 MB) downloads to `~/.cache/huggingface/`. Neo4j plugins (~200 MB) download to Docker volume `neo4j_plugins`.
 

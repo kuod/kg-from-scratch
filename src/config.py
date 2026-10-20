@@ -17,6 +17,7 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "claude-haiku-4-5-20251001")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "claude-sonnet-4-6")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "pritamdeka/PubMedBERT-mnli-snli-scinli-scitail-mednli-stsb")
 SCISPACY_MODEL = os.getenv("SCISPACY_MODEL", "en_core_sci_lg")

@@ -6,14 +6,24 @@ Results are disk-cached in data/cache/ to make re-runs free.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any
 
-from src.config import CACHE_DIR, LLM_MODEL
+from src.config import CACHE_DIR, LLM_FALLBACK_MODEL, LLM_MODEL
 from src.ingest import Chunk
 from src.ner import NEREntity, format_ner_hints
+
+log = logging.getLogger(__name__)
+
+# Bump when the user-message template or call settings below change in a way the
+# system prompt text alone does not capture. Any bump invalidates every cache entry.
+PROMPT_VERSION = "2"
+_MAX_TOKENS = 2048
+_TEMPERATURE = 0.0
 
 ENTITY_TYPES = ["Gene", "Protein", "Drug", "Disease", "Pathway", "CellType", "Organism", "Mechanism"]
 RELATIONSHIP_TYPES = [
@@ -59,31 +69,105 @@ def _cache_path(paper_id: str, chunk_index: int) -> Path:
     return CACHE_DIR / f"{paper_id}__{chunk_index:04d}.json"
 
 
-def _cache_key(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:12]
+def _config_key() -> str:
+    """Fingerprint of everything except the chunk: models, prompt, call settings."""
+    cfg = {
+        "prompt_version": PROMPT_VERSION,
+        "system_prompt": _SYSTEM_PROMPT,
+        "model": LLM_MODEL,
+        "fallback_model": LLM_FALLBACK_MODEL,
+        "max_tokens": _MAX_TOKENS,
+        "temperature": _TEMPERATURE,
+    }
+    return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def _cache_key(text: str, ner_entities: list[NEREntity] | None = None) -> str:
+    """Key over (model, prompt, settings, NER hints, chunk text)."""
+    payload = json.dumps(
+        [_config_key(), format_ner_hints(ner_entities or []), text], sort_keys=True
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _load_entry(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def extract_from_chunk(chunk: Chunk, ner_entities: list[NEREntity]) -> dict[str, Any]:
     """Extract entities and relationships from a single chunk.
 
     Returns a dict with keys 'entities' and 'relationships'.
-    Results are read from cache if available.
+    Results are read from cache if the entry's key matches the current
+    model, prompt, settings, NER hints and chunk text; otherwise re-extracted.
     """
     cache_file = _cache_path(chunk.paper_id, chunk.chunk_index)
+    key = _cache_key(chunk.text, ner_entities)
     if cache_file.exists():
-        try:
-            cached = json.loads(cache_file.read_text())
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            cached = None  # truncated/corrupt cache entry: re-extract
-        if isinstance(cached, dict) and cached.get("_text_key") == _cache_key(chunk.text):
+        cached = _load_entry(cache_file)  # None: truncated/corrupt, re-extract
+        if cached is not None and cached.get("_cache_key") == key:
             return cached
+        if cached is not None and "_cache_key" not in cached:
+            log.warning(
+                "Legacy cache entry %s (no model/prompt key): treating as a miss and "
+                "re-calling the LLM", cache_file.name,
+            )
 
     result = _call_llm(chunk.text, ner_entities)
-    result["_text_key"] = _cache_key(chunk.text)
+    result["_cache_key"] = key
+    result["_config_key"] = _config_key()
     tmp = cache_file.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(result, indent=2))
     tmp.replace(cache_file)  # atomic: an interrupted run never leaves a partial file
     return result
+
+
+def cache_status(purge: bool = False) -> dict[str, int]:
+    """Count cache entries by freshness; optionally delete the stale ones.
+
+    stale = legacy (no key), or produced under a different model/prompt/settings.
+    Unreadable files count as 'corrupt' and are also removed when purging.
+    Entries whose only difference is chunk text/NER hints are not detectable
+    here (they self-heal on the next build) and count as current.
+    """
+    counts = {"current": 0, "stale": 0, "legacy": 0, "corrupt": 0}
+    cfg = _config_key()
+    for path in sorted(CACHE_DIR.glob("*.json")):
+        entry = _load_entry(path)
+        if entry is None:
+            kind = "corrupt"
+        elif "_cache_key" not in entry:
+            kind = "legacy"
+        elif entry.get("_config_key") != cfg:
+            kind = "stale"
+        else:
+            kind = "current"
+        counts[kind] += 1
+        if purge and kind != "current":
+            path.unlink(missing_ok=True)
+    return counts
+
+
+def _main() -> None:
+    ap = argparse.ArgumentParser(description="Inspect or purge the LLM extraction cache")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--cache-status", action="store_true", help="Report current/stale entries")
+    g.add_argument("--purge-stale", action="store_true", help="Delete stale/legacy/corrupt entries")
+    args = ap.parse_args()
+    counts = cache_status(purge=args.purge_stale)
+    verb = "purged" if args.purge_stale else "found"
+    stale = counts["stale"] + counts["legacy"] + counts["corrupt"]
+    print(f"Cache {CACHE_DIR}: current={counts['current']} stale={counts['stale']} "
+          f"legacy={counts['legacy']} corrupt={counts['corrupt']}")
+    print(f"{stale} non-current entries {verb}; each will be re-extracted (LLM spend) on next build.")
+
+
+if __name__ == "__main__":
+    _main()
 
 
 def _call_llm(text: str, ner_entities: list[NEREntity]) -> dict[str, Any]:
@@ -110,8 +194,8 @@ def _call_groq(user_message: str) -> dict[str, Any]:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ],
-        temperature=0.0,
-        max_tokens=2048,
+        temperature=_TEMPERATURE,
+        max_tokens=_MAX_TOKENS,
         response_format={"type": "json_object"},
     )
     raw = response.choices[0].message.content or "{}"
@@ -123,8 +207,8 @@ def _call_anthropic(user_message: str) -> dict[str, Any]:
 
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
+        model=LLM_FALLBACK_MODEL,
+        max_tokens=_MAX_TOKENS,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )

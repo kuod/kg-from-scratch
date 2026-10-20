@@ -2,7 +2,8 @@
 Biomedical named entity recognition using scispaCy.
 
 Primary model:  en_core_sci_lg   (UMLS semantic types)
-Linker:         en_ner_bc5cdr_md  (BC5CDR drug/disease → UMLS CUI)
+Supplement:     en_ner_bc5cdr_md  (BC5CDR drug/disease; no UMLS linking)
+Linker:         optional scispacy_linker (UMLS), attached to en_core_sci_lg only
 
 Install:
     pip install scispacy

@@ -1,5 +1,5 @@
 """
-Full pipeline runner: PDF → Markdown → Graph → Resolve → Embed.
+Full pipeline runner: PDF → Markdown → Graph → Resolve → Clean → Embed.
 
 Usage:
     python scripts/build.py [--clear] [--resume] [--paper ID] [--skip-pdf] [--skip-embed]

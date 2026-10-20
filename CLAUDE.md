@@ -50,13 +50,15 @@ Named Entity Recognition (ner.py) → Biomedical entity extraction via scispaCy
     ↓
 LLM Relation Extraction (extract.py) → Groq llama-3.3 extracts relationships
     ↓
-Graph Construction (graph.py) → Neo4j schema: Paper → Chunk → Entity → Relationship
+Graph Construction (graph.py, build_graph.py) → Neo4j schema: Paper → Chunk → Entity → Relationship
+    ↓
+Confidence Intervals (confidence.py) → Wilson score CI on edge evidence counts (computed at the end of the graph build)
     ↓
 Entity Resolution (resolve.py) → Merge aliases to canonical names (e.g., p53 → TP53)
     ↓
-Embedding (embed.py) → PubMedBERT 768-dim vectors for semantic search
+Graph Cleanup (clean_graph.py) → Remove noise nodes and self-loop edges
     ↓
-Confidence Intervals (confidence.py) → Wilson score CI on edge evidence counts
+Embedding (embed.py) → PubMedBERT 768-dim vectors for semantic search
     ↓
 Chatbot (agent.py) → Claude agent with 7 tools for RAG, reports CI bounds
     ↓
@@ -74,7 +76,7 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
   - Entry point: `pdf_to_markdown(pdf_path, out_path) → str`
 
 - **`src/ingest.py`** — Parses Markdown into chunks
-  - Detects sections via ATX headers (`##`) and bold lines (`**...**`)
+  - Detects sections via ATX headers (`#`–`######`; the first `#` is the title) and standalone bold lines (`**...**`), excluding Figure/Table caption lines
   - Applies sliding window for long sections (max 1200 words)
   - Returns `Chunk` dataclass: `(paper_id, section, chunk_index, text, char_offset)`
   - Entry point: `load_paper(path: Path) → list[Chunk]`
@@ -84,7 +86,7 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
 - **`src/ner.py`** — Biomedical Named Entity Recognition
   - Uses scispaCy with two models:
     - `en_core_sci_lg` — General biomedical NER (UMLS semantic types: Gene, Disease, Drug, etc.)
-    - `en_ner_bc5cdr_md` — Specialized disease/drug detection with UMLS CUI linking
+    - `en_ner_bc5cdr_md` — Specialized disease/drug detection (no UMLS linking; the optional `scispacy_linker` is attached to `en_core_sci_lg` only)
   - Returns `NEREntity` dataclass with `(text, label, raw_label, umls_cui, score)`
   - Maps UMLS semantic types to 8 canonical entity types: Gene, Protein, Drug, Disease, Pathway, CellType, Organism, Mechanism
   - Entry point: `extract_entities_ner(text: str) → list[NEREntity]`
@@ -93,7 +95,7 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
   - Calls Groq `llama-3.3-70b-versatile` (configurable via `LLM_MODEL` env var); fallback Anthropic model via `LLM_FALLBACK_MODEL`
   - Prompt injects NER results to guide extraction
   - Returns JSON: `{entities: [...], relationships: [...]}`
-  - **Caching**: Results stored in `data/cache/<paper_id>__<chunk_index>.json` keyed on a hash of model(s) + system prompt + `PROMPT_VERSION` + call settings + NER hints + chunk text (`_cache_key`, stored with `_config_key`). Changing any of them is a miss. Bump `PROMPT_VERSION` when editing the user-message template. Pre-key (legacy) files are logged and treated as misses (re-calls the LLM = spend; this invalidated all pre-existing caches). `python -m src.extract --cache-status` / `--purge-stale` report/delete stale entries
+  - **Caching**: Results stored in `data/cache/<paper_id>__<chunk_index:04d>.json` (zero-padded) keyed on a hash of model(s) + system prompt + `PROMPT_VERSION` + call settings + NER hints + chunk text (`_cache_key`, stored with `_config_key`). Changing any of them is a miss. Bump `PROMPT_VERSION` when editing the user-message template. Pre-key (legacy) files are logged and treated as misses (re-calls the LLM = spend; this invalidated all pre-existing caches). `python -m src.extract --cache-status` / `--purge-stale` report/delete stale entries
   - Fallback: If Groq fails, uses Anthropic SDK
   - Entry point: `extract_from_chunk(chunk: Chunk, ner_entities: list[NEREntity]) → dict`
 
@@ -121,12 +123,12 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
 - **`src/build_graph.py`** — Full pipeline orchestrator
   - Loads papers from `data/papers/`, processes chunks in sequence
   - For each chunk: NER → extract → upsert entities & relationships
-  - Supports `--resume` flag to skip already-processed chunks (idempotent)
-  - Calls `compute_edge_confidences(db)` after graph is built
+  - CLI flags: `--resume` (skip already-processed chunks, idempotent), `--clear` (wipe the graph first), `--paper ID` (process one paper). The `--skip-*` flags belong to `scripts/build.py`, not here
+  - Calls `compute_edge_confidences(db)` at the end of the graph build (before resolution/cleanup; confidences are not recomputed after merges)
   - Entry point: `build(papers_dir, clear=False, resume=False, paper_id=None) → None`
 
 - **`src/resolve.py`** — Entity resolution (synonym merging)
-  - Pass 1: Curated `SYNONYM_GROUPS` dict (p53→TP53, her2→ERBB2, etc.)
+  - Pass 1: Curated `SYNONYM_GROUPS` dict keyed by `(label, alias)` (p53→TP53, her2→ERBB2, etc.); merges are label-scoped. Ambiguous aliases (ms, ad, pd, tam, neu) and family/isoform-collapsing ones (pi3k, akt, erk, jnk, pdgf, vegf165, 'braf v600e', 'alk fusion') are deliberately excluded
   - Pass 2: String normalization (lowercase, strip punctuation) via APOC
   - Entry point: `run_resolution(db) → None`
 
@@ -134,6 +136,7 @@ UI (app.py) → Streamlit with 4 tabs: Ask, Graph Explorer, Papers, Stats
   - Removes isolated nodes (no edges)
   - Removes trivial names (single char, purely numeric)
   - Removes stopword-only nodes
+  - Removes self-loop edges (4th pass)
   - Entry point: `clean_graph(db) → dict[str, int]` (returns removal counts)
 
 #### **5. Embedding & Semantic Search**
@@ -260,11 +263,12 @@ python scripts/build.py --skip-embed         # Skip embedding step (faster, no s
 # Just convert PDFs to Markdown
 python scripts/convert_pdfs.py
 python scripts/convert_pdfs.py --pdf path/to/paper.pdf
+python scripts/convert_pdfs.py --out-dir some/dir   # default output: data/papers/
 ```
 
 ### Testing
 
-All tests run **without Neo4j or API keys** (they avoid or stub external dependencies):
+All tests run **without Neo4j, API keys or scispaCy models** (external dependencies are stubbed):
 
 ```bash
 pytest tests/                           # Run all tests
@@ -274,10 +278,18 @@ pytest tests/test_confidence.py         # Test Wilson CI computation
 pytest tests/test_ingest.py::test_load_paper_returns_chunks -v  # Single test
 ```
 
-Test files:
+Test files (all stubbed: none needs Neo4j, API keys or scispaCy models):
+- `tests/test_agent.py` — Agent tool loop
+- `tests/test_build_resume.py` — `--resume` chunk skipping in the build
+- `tests/test_clean_graph.py` — Post-extraction cleanup passes
+- `tests/test_confidence.py` — Wilson score CI edge cases (k=0, k=n, partial evidence)
+- `tests/test_dependencies.py` — Declared dependencies
+- `tests/test_extract.py` — LLM extraction, cache keys and fallback
+- `tests/test_graph_queries.py` — Graph query helpers
 - `tests/test_ingest.py` — Markdown chunking with various header formats
 - `tests/test_ner.py` — Entity type normalization from UMLS labels
-- `tests/test_confidence.py` — Wilson score CI edge cases (k=0, k=n, partial evidence)
+- `tests/test_pdf_convert.py` — PDF → Markdown conversion
+- `tests/test_resolve.py` — Entity resolution synonym groups
 
 ### Linting & Formatting
 
@@ -300,7 +312,7 @@ Code style:
 
 **Neo4j connection errors:** Ensure `docker compose up -d` is running and `NEO4J_PASSWORD` in `.env` matches `docker-compose.yml`.
 
-**LLM extraction cache:** Entries auto-invalidate when model/prompt/settings change (the first build after upgrading to keyed caches re-calls the LLM for everything). `python -m src.extract --cache-status` shows stale counts; `--purge-stale` deletes them. Or delete `data/cache/` / individual `<paper_id>__<chunk_index>.json` files.
+**LLM extraction cache:** Entries auto-invalidate when model/prompt/settings change (the first build after upgrading to keyed caches re-calls the LLM for everything). `python -m src.extract --cache-status` shows stale counts; `--purge-stale` deletes them. Or delete `data/cache/` / individual `<paper_id>__<chunk_index:04d>.json` files.
 
 **Embedding model downloads (first run only):** PubMedBERT (~400 MB) downloads to `~/.cache/huggingface/`. Neo4j plugins (~200 MB) download to Docker volume `neo4j_plugins`.
 
